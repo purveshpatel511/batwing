@@ -1,0 +1,21 @@
+name: batwing
+base: core18
+version: '0.17.1'
+summary: A cat(1) clone with syntax highlighting and Git integration.
+description: |
+  This is a cat clone with more utilities and amazing features like syntax highlighting, Git integration
+  and other cool stuffs.
+
+grade: stable
+confinement: strict
+
+apps:
+  batwing:
+    command: bin/bat
+    plugs:
+      - home
+
+parts:
+  batwing:
+    plugin: rust
+    source: .
