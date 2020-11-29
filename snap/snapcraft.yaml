@@ -1,4 +1,4 @@
-name: batwing
+name: batcat
 base: core18
 version: '0.17.1'
 summary: A cat(1) clone with syntax highlighting and Git integration.
