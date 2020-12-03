@@ -10,12 +10,12 @@ grade: stable
 confinement: strict
 
 apps:
-  batwing:
+  batcat:
     command: bin/bat
     plugs:
       - home
 
 parts:
-  batwing:
+  batcat:
     plugin: rust
     source: .
