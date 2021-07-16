@@ -1,7 +1,9 @@
-use std::ffi::{OsStr, OsString};
+use std::convert::TryFrom;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
+use std::path::{Path, PathBuf};
 
+use clircle::{Clircle, Identifier};
 use content_inspector::{self, ContentType};
 
 use crate::error::*;
@@ -67,7 +69,7 @@ impl InputDescription {
 }
 
 pub(crate) enum InputKind<'a> {
-    OrdinaryFile(OsString),
+    OrdinaryFile(PathBuf),
     StdIn,
     CustomReader(Box<dyn Read + 'a>),
 }
@@ -84,7 +86,7 @@ impl<'a> InputKind<'a> {
 
 #[derive(Clone, Default)]
 pub(crate) struct InputMetadata {
-    pub(crate) user_provided_name: Option<OsString>,
+    pub(crate) user_provided_name: Option<PathBuf>,
 }
 
 pub struct Input<'a> {
@@ -94,7 +96,7 @@ pub struct Input<'a> {
 }
 
 pub(crate) enum OpenedInputKind {
-    OrdinaryFile(OsString),
+    OrdinaryFile(PathBuf),
     StdIn,
     CustomReader,
 }
@@ -107,8 +109,12 @@ pub(crate) struct OpenedInput<'a> {
 }
 
 impl<'a> Input<'a> {
-    pub fn ordinary_file(path: &OsStr) -> Self {
-        let kind = InputKind::OrdinaryFile(path.to_os_string());
+    pub fn ordinary_file(path: impl AsRef<Path>) -> Self {
+        Self::_ordinary_file(path.as_ref())
+    }
+
+    fn _ordinary_file(path: &Path) -> Self {
+        let kind = InputKind::OrdinaryFile(path.to_path_buf());
         Input {
             description: kind.description(),
             metadata: InputMetadata::default(),
@@ -135,14 +141,14 @@ impl<'a> Input<'a> {
     }
 
     pub fn is_stdin(&self) -> bool {
-        if let InputKind::StdIn = self.kind {
-            true
-        } else {
-            false
-        }
+        matches!(self.kind, InputKind::StdIn)
     }
 
-    pub fn with_name(mut self, provided_name: Option<&OsStr>) -> Self {
+    pub fn with_name(self, provided_name: Option<impl AsRef<Path>>) -> Self {
+        self._with_name(provided_name.as_ref().map(|it| it.as_ref()))
+    }
+
+    fn _with_name(mut self, provided_name: Option<&Path>) -> Self {
         if let Some(name) = provided_name {
             self.description.name = name.to_string_lossy().to_string()
         }
@@ -159,25 +165,55 @@ impl<'a> Input<'a> {
         &mut self.description
     }
 
-    pub(crate) fn open<R: BufRead + 'a>(self, stdin: R) -> Result<OpenedInput<'a>> {
+    pub(crate) fn open<R: BufRead + 'a>(
+        self,
+        stdin: R,
+        stdout_identifier: Option<&Identifier>,
+    ) -> Result<OpenedInput<'a>> {
         let description = self.description().clone();
         match self.kind {
-            InputKind::StdIn => Ok(OpenedInput {
-                kind: OpenedInputKind::StdIn,
-                description,
-                metadata: self.metadata,
-                reader: InputReader::new(stdin),
-            }),
+            InputKind::StdIn => {
+                if let Some(stdout) = stdout_identifier {
+                    let input_identifier = Identifier::try_from(clircle::Stdio::Stdin)
+                        .map_err(|e| format!("Stdin: Error identifying file: {}", e))?;
+                    if stdout.surely_conflicts_with(&input_identifier) {
+                        return Err("IO circle detected. The input from stdin is also an output. Aborting to avoid infinite loop.".into());
+                    }
+                }
+
+                Ok(OpenedInput {
+                    kind: OpenedInputKind::StdIn,
+                    description,
+                    metadata: self.metadata,
+                    reader: InputReader::new(stdin),
+                })
+            }
+
             InputKind::OrdinaryFile(path) => Ok(OpenedInput {
                 kind: OpenedInputKind::OrdinaryFile(path.clone()),
                 description,
                 metadata: self.metadata,
                 reader: {
-                    let file = File::open(&path)
+                    let mut file = File::open(&path)
                         .map_err(|e| format!("'{}': {}", path.to_string_lossy(), e))?;
                     if file.metadata()?.is_dir() {
                         return Err(format!("'{}' is a directory.", path.to_string_lossy()).into());
                     }
+
+                    if let Some(stdout) = stdout_identifier {
+                        let input_identifier = Identifier::try_from(file).map_err(|e| {
+                            format!("{}: Error identifying file: {}", path.to_string_lossy(), e)
+                        })?;
+                        if stdout.surely_conflicts_with(&input_identifier) {
+                            return Err(format!(
+                                "IO circle detected. The input from '{}' is also an output. Aborting to avoid infinite loop.",
+                                path.to_string_lossy()
+                            )
+                            .into());
+                        }
+                        file = input_identifier.into_inner().expect("The file was lost in the clircle::Identifier, this should not have happened...");
+                    }
+
                     InputReader::new(BufReader::new(file))
                 },
             }),

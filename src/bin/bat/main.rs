@@ -9,7 +9,6 @@ mod directories;
 mod input;
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
 use std::io;
 use std::io::{BufReader, Write};
 use std::path::Path;
@@ -35,7 +34,7 @@ use bat::{
     error::*,
     input::Input,
     style::{StyleComponent, StyleComponents},
-    MappingTarget,
+    MappingTarget, PagingMode,
 };
 
 const THEME_PREVIEW_DATA: &[u8] = include_bytes!("../../../assets/theme_preview.rs");
@@ -78,7 +77,9 @@ fn get_syntax_mapping_to_paths<'a>(
     map
 }
 
-pub fn list_languages(config: &Config) -> Result<()> {
+pub fn get_languages(config: &Config) -> Result<String> {
+    let mut result: String = String::new();
+
     let assets = assets_from_cache_or_binary()?;
     let mut languages = assets
         .syntaxes()
@@ -119,12 +120,9 @@ pub fn list_languages(config: &Config) -> Result<()> {
         }
     }
 
-    let stdout = io::stdout();
-    let mut stdout = stdout.lock();
-
     if config.loop_through {
         for lang in languages {
-            writeln!(stdout, "{}:{}", lang.name, lang.file_extensions.join(","))?;
+            result += &format!("{}:{}\n", lang.name, lang.file_extensions.join(","));
         }
     } else {
         let longest = languages
@@ -145,7 +143,7 @@ pub fn list_languages(config: &Config) -> Result<()> {
         };
 
         for lang in languages {
-            write!(stdout, "{:width$}{}", lang.name, separator, width = longest)?;
+            result += &format!("{:width$}{}", lang.name, separator, width = longest);
 
             // Number of characters on this line so far, wrap before `desired_width`
             let mut num_chars = 0;
@@ -156,20 +154,20 @@ pub fn list_languages(config: &Config) -> Result<()> {
                 let new_chars = word.len() + comma_separator.len();
                 if num_chars + new_chars >= desired_width {
                     num_chars = 0;
-                    write!(stdout, "\n{:width$}{}", "", separator, width = longest)?;
+                    result += &format!("\n{:width$}{}", "", separator, width = longest);
                 }
 
                 num_chars += new_chars;
-                write!(stdout, "{}", style.paint(&word[..]))?;
+                result += &format!("{}", style.paint(&word[..]));
                 if extension.peek().is_some() {
-                    write!(stdout, "{}", comma_separator)?;
+                    result += comma_separator;
                 }
             }
-            writeln!(stdout)?;
+            result += "\n";
         }
     }
 
-    Ok(())
+    Ok(result)
 }
 
 fn theme_preview_file<'a>() -> Input<'a> {
@@ -200,19 +198,19 @@ pub fn list_themes(cfg: &Config) -> Result<()> {
                 .ok();
             writeln!(stdout)?;
         }
+        writeln!(
+            stdout,
+            "Further themes can be installed to '{}', \
+            and are added to the cache with `bat cache --build`. \
+            For more information, see:\n\n  \
+            https://github.com/sharkdp/bat#adding-new-themes",
+            PROJECT_DIRS.config_dir().join("themes").to_string_lossy()
+        )?;
     } else {
         for theme in assets.themes() {
             writeln!(stdout, "{}", theme)?;
         }
     }
-    writeln!(
-        stdout,
-        "Further themes can be installed to '{}', \
-        and are added to the cache with `bat cache --build`. \
-        For more information, see:\n\n  \
-        https://github.com/sharkdp/bat#adding-new-themes",
-        config_file().join("themes").to_string_lossy()
-    )?;
 
     Ok(())
 }
@@ -228,6 +226,50 @@ fn run_controller(inputs: Vec<Input>, config: &Config) -> Result<bool> {
 fn run() -> Result<bool> {
     let app = App::new()?;
 
+    if app.matches.is_present("diagnostic") {
+        use bugreport::{bugreport, collector::*, format::Markdown};
+        let pager = bat::config::get_pager_executable(app.matches.value_of("pager"))
+            .unwrap_or_else(|| "less".to_owned()); // FIXME: Avoid non-canonical path to "less".
+
+        let report = bugreport!()
+            .info(SoftwareVersion::default())
+            .info(OperatingSystem::default())
+            .info(CommandLine::default())
+            .info(EnvironmentVariables::list(&[
+                "SHELL",
+                "PAGER",
+                "LESS",
+                "BAT_PAGER",
+                "BAT_CACHE_PATH",
+                "BAT_CONFIG_PATH",
+                "BAT_OPTS",
+                "BAT_STYLE",
+                "BAT_TABS",
+                "BAT_THEME",
+                "XDG_CONFIG_HOME",
+                "XDG_CACHE_HOME",
+                "COLORTERM",
+                "NO_COLOR",
+                "MANPAGER",
+            ]))
+            .info(FileContent::new("Config file", config_file()))
+            .info(CompileTimeInformation::default());
+
+        let mut report = if let Ok(resolved_path) = grep_cli::resolve_binary(pager) {
+            report.info(CommandOutput::new(
+                "Less version",
+                resolved_path,
+                &["--version"],
+            ))
+        } else {
+            report
+        };
+
+        report.print::<Markdown>();
+
+        return Ok(true);
+    }
+
     match app.matches.subcommand() {
         ("cache", Some(cache_matches)) => {
             // If there is a file named 'cache' in the current working directory,
@@ -237,7 +279,7 @@ fn run() -> Result<bool> {
                 run_cache_subcommand(cache_matches)?;
                 Ok(true)
             } else {
-                let inputs = vec![Input::ordinary_file(OsStr::new("cache"))];
+                let inputs = vec![Input::ordinary_file("cache")];
                 let config = app.config(&inputs)?;
 
                 run_controller(inputs, &config)
@@ -248,8 +290,14 @@ fn run() -> Result<bool> {
             let config = app.config(&inputs)?;
 
             if app.matches.is_present("list-languages") {
-                list_languages(&config)?;
-                Ok(true)
+                let languages: String = get_languages(&config)?;
+                let inputs: Vec<Input> = vec![Input::from_reader(Box::new(languages.as_bytes()))];
+                let plain_config = Config {
+                    style_components: StyleComponents::new(StyleComponent::Plain.components(false)),
+                    paging_mode: PagingMode::QuitIfOneScreen,
+                    ..Default::default()
+                };
+                run_controller(inputs, &plain_config)
             } else if app.matches.is_present("list-themes") {
                 list_themes(&config)?;
                 Ok(true)

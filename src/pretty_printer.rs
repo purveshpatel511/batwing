@@ -1,5 +1,5 @@
-use std::ffi::OsStr;
 use std::io::Read;
+use std::path::Path;
 
 use console::Term;
 use syntect::parsing::SyntaxReference;
@@ -40,10 +40,11 @@ pub struct PrettyPrinter<'a> {
 
 impl<'a> PrettyPrinter<'a> {
     pub fn new() -> Self {
-        let mut config = Config::default();
-
-        config.colored_output = true;
-        config.true_color = true;
+        let config = Config {
+            colored_output: true,
+            true_color: true,
+            ..Default::default()
+        };
 
         PrettyPrinter {
             inputs: vec![],
@@ -71,7 +72,7 @@ impl<'a> PrettyPrinter<'a> {
     }
 
     /// Add a file which should be pretty-printed
-    pub fn input_file(&mut self, path: impl AsRef<OsStr>) -> &mut Self {
+    pub fn input_file(&mut self, path: impl AsRef<Path>) -> &mut Self {
         self.input(Input::from_file(path).kind("File"))
     }
 
@@ -79,7 +80,7 @@ impl<'a> PrettyPrinter<'a> {
     pub fn input_files<I, P>(&mut self, paths: I) -> &mut Self
     where
         I: IntoIterator<Item = P>,
-        P: AsRef<OsStr>,
+        P: AsRef<Path>,
     {
         self.inputs(paths.into_iter().map(Input::from_file))
     }
@@ -90,45 +91,14 @@ impl<'a> PrettyPrinter<'a> {
         self
     }
 
-    /// Add STDIN as an input (with customized name)
-    #[deprecated]
-    pub fn input_stdin_with_name(&mut self, name: impl AsRef<OsStr>) -> &mut Self {
-        self.inputs
-            .push(Input::from_stdin().name(name).kind("File"));
-        self
-    }
-
     /// Add a byte string as an input
     pub fn input_from_bytes(&mut self, content: &'a [u8]) -> &mut Self {
         self.input_from_reader(content)
     }
 
-    /// Add a byte string as an input (with customized name)
-    #[deprecated]
-    #[allow(deprecated)]
-    pub fn input_from_bytes_with_name(
-        &mut self,
-        content: &'a [u8],
-        name: impl AsRef<OsStr>,
-    ) -> &mut Self {
-        self.input_from_reader_with_name(content, name)
-    }
-
     /// Add a custom reader as an input
     pub fn input_from_reader<R: Read + 'a>(&mut self, reader: R) -> &mut Self {
         self.inputs.push(Input::from_reader(reader));
-        self
-    }
-
-    /// Add a custom reader as an input (with customized name)
-    #[deprecated]
-    pub fn input_from_reader_with_name<R: Read + 'a>(
-        &mut self,
-        reader: R,
-        name: impl AsRef<OsStr>,
-    ) -> &mut Self {
-        self.inputs
-            .push(Input::from_reader(reader).name(name).kind("File"));
         self
     }
 
@@ -188,19 +158,9 @@ impl<'a> PrettyPrinter<'a> {
 
     /// Whether to show modification markers for VCS changes. This has no effect if
     /// the `git` feature is not activated.
-    #[cfg_attr(
-        not(feature = "git"),
-        deprecated(
-            note = "Using vcs_modification_markers without the 'git' feature has no effect. \
-                    The function will be removed (for non-'git' use cases) in the future."
-        )
-    )]
-    #[allow(unused_variables)]
+    #[cfg(feature = "git")]
     pub fn vcs_modification_markers(&mut self, yes: bool) -> &mut Self {
-        #[cfg(feature = "git")]
-        {
-            self.active_style_components.vcs_modification_markers = yes;
-        }
+        self.active_style_components.vcs_modification_markers = yes;
         self
     }
 
@@ -320,6 +280,12 @@ impl<'a> PrettyPrinter<'a> {
     }
 }
 
+impl Default for PrettyPrinter<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// An input source for the pretty printer.
 pub struct Input<'a> {
     input: input::Input<'a>,
@@ -332,8 +298,8 @@ impl<'a> Input<'a> {
     }
 
     /// A new input from a file.
-    pub fn from_file(path: impl AsRef<OsStr>) -> Self {
-        input::Input::ordinary_file(path.as_ref()).into()
+    pub fn from_file(path: impl AsRef<Path>) -> Self {
+        input::Input::ordinary_file(path).into()
     }
 
     /// A new input from bytes.
@@ -348,8 +314,8 @@ impl<'a> Input<'a> {
 
     /// The filename of the input.
     /// This affects syntax detection and changes the default header title.
-    pub fn name(mut self, name: impl AsRef<OsStr>) -> Self {
-        self.input = self.input.with_name(Some(name.as_ref()));
+    pub fn name(mut self, name: impl AsRef<Path>) -> Self {
+        self.input = self.input.with_name(Some(name));
         self
     }
 
@@ -362,7 +328,7 @@ impl<'a> Input<'a> {
         self
     }
 
-    /// The title for the input (e.g. "http://example.com/example.txt")
+    /// The title for the input (e.g. "Descriptive title")
     /// This defaults to the file name.
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.input.description_mut().set_title(Some(title.into()));
@@ -370,14 +336,14 @@ impl<'a> Input<'a> {
     }
 }
 
-impl<'a> Into<Input<'a>> for input::Input<'a> {
-    fn into(self) -> Input<'a> {
-        Input { input: self }
+impl<'a> From<input::Input<'a>> for Input<'a> {
+    fn from(input: input::Input<'a>) -> Self {
+        Self { input }
     }
 }
 
-impl<'a> Into<input::Input<'a>> for Input<'a> {
-    fn into(self) -> input::Input<'a> {
-        self.input
+impl<'a> From<Input<'a>> for input::Input<'a> {
+    fn from(Input { input }: Input<'a>) -> Self {
+        input
     }
 }

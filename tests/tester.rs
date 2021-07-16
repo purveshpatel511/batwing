@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tempdir::TempDir;
+use tempfile::TempDir;
 
 use git2::build::CheckoutBuilder;
 use git2::Repository;
@@ -19,23 +19,6 @@ pub struct BatTester {
 }
 
 impl BatTester {
-    pub fn new() -> Self {
-        let temp_dir = create_sample_directory().expect("sample directory");
-
-        let root = env::current_exe()
-            .expect("tests executable")
-            .parent()
-            .expect("tests executable directory")
-            .parent()
-            .expect("bat executable directory")
-            .to_path_buf();
-
-        let exe_name = if cfg!(windows) { "bat.exe" } else { "bat" };
-        let exe = root.join(exe_name);
-
-        BatTester { temp_dir, exe }
-    }
-
     pub fn test_snapshot(&self, name: &str, style: &str) {
         let output = Command::new(&self.exe)
             .current_dir(self.temp_dir.path())
@@ -66,9 +49,28 @@ impl BatTester {
     }
 }
 
+impl Default for BatTester {
+    fn default() -> Self {
+        let temp_dir = create_sample_directory().expect("sample directory");
+
+        let root = env::current_exe()
+            .expect("tests executable")
+            .parent()
+            .expect("tests executable directory")
+            .parent()
+            .expect("bat executable directory")
+            .to_path_buf();
+
+        let exe_name = if cfg!(windows) { "bat.exe" } else { "bat" };
+        let exe = root.join(exe_name);
+
+        BatTester { temp_dir, exe }
+    }
+}
+
 fn create_sample_directory() -> Result<TempDir, git2::Error> {
     // Create temp directory and initialize repository
-    let temp_dir = TempDir::new("bat-tests").expect("Temp directory");
+    let temp_dir = TempDir::new().expect("Temp directory");
     let repo = Repository::init(&temp_dir)?;
 
     // Copy over `sample.rs`

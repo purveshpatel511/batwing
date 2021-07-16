@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::env;
-use std::ffi::OsStr;
+use std::path::Path;
 use std::str::FromStr;
 
 use atty::{self, Stream};
@@ -16,6 +16,7 @@ use console::Term;
 use crate::input::{new_file_input, new_stdin_input};
 use bat::{
     assets::HighlightingAssets,
+    bat_warning,
     config::{Config, VisibleLines},
     error::*,
     input::Input,
@@ -82,10 +83,9 @@ impl App {
             Some("always") => PagingMode::Always,
             Some("never") => PagingMode::Never,
             Some("auto") | None => {
-                if self.matches.occurrences_of("plain") > 1 {
-                    // If we have -pp as an option when in auto mode, the pager should be disabled.
-                    PagingMode::Never
-                } else if self.matches.is_present("no-paging") {
+                // If we have -pp as an option when in auto mode, the pager should be disabled.
+                let extra_plain = self.matches.occurrences_of("plain") > 1;
+                if extra_plain || self.matches.is_present("no-paging") {
                     PagingMode::Never
                 } else if inputs.iter().any(Input::is_stdin) {
                     // If we are reading from stdin, only enable paging if we write to an
@@ -150,10 +150,10 @@ impl App {
             wrapping_mode: if self.interactive_output || maybe_term_width.is_some() {
                 match self.matches.value_of("wrap") {
                     Some("character") => WrappingMode::Character,
-                    Some("never") => WrappingMode::NoWrapping,
+                    Some("never") => WrappingMode::NoWrapping(true),
                     Some("auto") | None => {
                         if style_components.plain() {
-                            WrappingMode::NoWrapping
+                            WrappingMode::NoWrapping(false)
                         } else {
                             WrappingMode::Character
                         }
@@ -163,7 +163,7 @@ impl App {
             } else {
                 // We don't have the tty width when piping to another program.
                 // There's no point in wrapping when this is the case.
-                WrappingMode::NoWrapping
+                WrappingMode::NoWrapping(false)
             },
             colored_output: self.matches.is_present("force-colorization")
                 || match self.matches.value_of("color") {
@@ -248,16 +248,19 @@ impl App {
             }
             _ => {}
         }
-        let filenames: Option<Vec<&str>> = self
+        let filenames: Option<Vec<&Path>> = self
             .matches
-            .values_of("file-name")
-            .map(|values| values.collect());
+            .values_of_os("file-name")
+            .map(|values| values.map(Path::new).collect());
 
-        let mut filenames_or_none: Box<dyn Iterator<Item = _>> = match filenames {
-            Some(ref filenames) => Box::new(filenames.iter().map(|name| Some(OsStr::new(*name)))),
+        let mut filenames_or_none: Box<dyn Iterator<Item = Option<&Path>>> = match filenames {
+            Some(filenames) => Box::new(filenames.into_iter().map(Some)),
             None => Box::new(std::iter::repeat(None)),
         };
-        let files: Option<Vec<&OsStr>> = self.matches.values_of_os("FILE").map(|vs| vs.collect());
+        let files: Option<Vec<&Path>> = self
+            .matches
+            .values_of_os("FILE")
+            .map(|vs| vs.map(Path::new).collect());
 
         if files.is_none() {
             return Ok(vec![new_stdin_input(
@@ -323,11 +326,7 @@ impl App {
 
         // If `grid` is set, remove `rule` as it is a subset of `grid`, and print a warning.
         if styled_components.grid() && styled_components.0.remove(&StyleComponent::Rule) {
-            use ansi_term::Colour::Yellow;
-            eprintln!(
-                "{}: Style 'rule' is a subset of style 'grid', 'rule' will not be visible.",
-                Yellow.paint("[bat warning]"),
-            );
+            bat_warning!("Style 'rule' is a subset of style 'grid', 'rule' will not be visible.");
         }
 
         Ok(styled_components)

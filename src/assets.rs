@@ -11,6 +11,7 @@ use syntect::parsing::{SyntaxReference, SyntaxSet, SyntaxSetBuilder};
 use path_abs::PathAbs;
 
 use crate::assets_metadata::AssetsMetadata;
+use crate::bat_warning;
 use crate::error::*;
 use crate::input::{InputReader, OpenedInput, OpenedInputKind};
 use crate::syntax_mapping::{MappingTarget, SyntaxMapping};
@@ -21,6 +22,23 @@ pub struct HighlightingAssets {
     pub(crate) theme_set: ThemeSet,
     fallback_theme: Option<&'static str>,
 }
+
+const IGNORED_SUFFIXES: [&str; 10] = [
+    // Editor etc backups
+    "~",
+    ".bak",
+    ".old",
+    ".orig",
+    // Debian and derivatives apt/dpkg backups
+    ".dpkg-dist",
+    ".dpkg-old",
+    // Red Hat and derivatives rpm backups
+    ".rpmnew",
+    ".rpmorig",
+    ".rpmsave",
+    // Build system input/template files
+    ".in",
+];
 
 impl HighlightingAssets {
     pub fn default_theme() -> &'static str {
@@ -37,9 +55,16 @@ impl HighlightingAssets {
         };
 
         let theme_dir = source_dir.join("themes");
-
-        let res = theme_set.add_from_folder(&theme_dir);
-        if res.is_err() {
+        if theme_dir.exists() {
+            let res = theme_set.add_from_folder(&theme_dir);
+            if let Err(err) = res {
+                println!(
+                    "Failed to load one or more themes from '{}' (reason: '{}')",
+                    theme_dir.to_string_lossy(),
+                    err,
+                );
+            }
+        } else {
             println!(
                 "No themes were found in '{}', using the default set",
                 theme_dir.to_string_lossy()
@@ -72,30 +97,9 @@ impl HighlightingAssets {
     }
 
     pub fn from_cache(cache_path: &Path) -> Result<Self> {
-        let syntax_set_path = cache_path.join("syntaxes.bin");
-        let theme_set_path = cache_path.join("themes.bin");
-
-        let syntax_set_file = File::open(&syntax_set_path).chain_err(|| {
-            format!(
-                "Could not load cached syntax set '{}'",
-                syntax_set_path.to_string_lossy()
-            )
-        })?;
-        let syntax_set: SyntaxSet = from_reader(BufReader::new(syntax_set_file))
-            .chain_err(|| "Could not parse cached syntax set")?;
-
-        let theme_set_file = File::open(&theme_set_path).chain_err(|| {
-            format!(
-                "Could not load cached theme set '{}'",
-                theme_set_path.to_string_lossy()
-            )
-        })?;
-        let theme_set: ThemeSet = from_reader(BufReader::new(theme_set_file))
-            .chain_err(|| "Could not parse cached theme set")?;
-
         Ok(HighlightingAssets {
-            syntax_set,
-            theme_set,
+            syntax_set: asset_from_cache(&cache_path.join("syntaxes.bin"), "syntax set")?,
+            theme_set: asset_from_cache(&cache_path.join("themes.bin"), "theme set")?,
             fallback_theme: None,
         })
     }
@@ -121,32 +125,12 @@ impl HighlightingAssets {
 
     pub fn save_to_cache(&self, target_dir: &Path, current_version: &str) -> Result<()> {
         let _ = fs::create_dir_all(target_dir);
-        let theme_set_path = target_dir.join("themes.bin");
-        let syntax_set_path = target_dir.join("syntaxes.bin");
-
-        print!(
-            "Writing theme set to {} ... ",
-            theme_set_path.to_string_lossy()
-        );
-        dump_to_file(&self.theme_set, &theme_set_path).chain_err(|| {
-            format!(
-                "Could not save theme set to {}",
-                theme_set_path.to_string_lossy()
-            )
-        })?;
-        println!("okay");
-
-        print!(
-            "Writing syntax set to {} ... ",
-            syntax_set_path.to_string_lossy()
-        );
-        dump_to_file(&self.syntax_set, &syntax_set_path).chain_err(|| {
-            format!(
-                "Could not save syntax set to {}",
-                syntax_set_path.to_string_lossy()
-            )
-        })?;
-        println!("okay");
+        asset_to_cache(&self.theme_set, &target_dir.join("themes.bin"), "theme set")?;
+        asset_to_cache(
+            &self.syntax_set,
+            &target_dir.join("syntaxes.bin"),
+            "syntax set",
+        )?;
 
         print!(
             "Writing metadata to folder {} ... ",
@@ -189,13 +173,12 @@ impl HighlightingAssets {
         match self.theme_set.themes.get(theme) {
             Some(theme) => theme,
             None => {
-                if theme != "" {
-                    use ansi_term::Colour::Yellow;
-                    eprintln!(
-                        "{}: Unknown theme '{}', using default.",
-                        Yellow.paint("[bat warning]"),
-                        theme
-                    );
+                if theme == "ansi-light" || theme == "ansi-dark" {
+                    bat_warning!("Theme '{}' is deprecated, using 'ansi' instead.", theme);
+                    return self.get_theme("ansi");
+                }
+                if !theme.is_empty() {
+                    bat_warning!("Unknown theme '{}', using default.", theme)
                 }
                 &self.theme_set.themes[self.fallback_theme.unwrap_or_else(|| Self::default_theme())]
             }
@@ -266,12 +249,25 @@ impl HighlightingAssets {
         self.syntax_set
             .find_syntax_by_extension(file_name.to_str().unwrap_or_default())
             .or_else(|| {
-                self.syntax_set.find_syntax_by_extension(
-                    Path::new(file_name)
-                        .extension()
-                        .and_then(|x| x.to_str())
-                        .unwrap_or_default(),
-                )
+                let file_path = Path::new(file_name);
+                self.syntax_set
+                    .find_syntax_by_extension(
+                        file_path
+                            .extension()
+                            .and_then(|x| x.to_str())
+                            .unwrap_or_default(),
+                    )
+                    .or_else(|| {
+                        if let Some(file_str) = file_path.to_str() {
+                            for suffix in IGNORED_SUFFIXES.iter() {
+                                if let Some(stripped_filename) = file_str.strip_suffix(suffix) {
+                                    return self
+                                        .get_extension_syntax(OsStr::new(stripped_filename));
+                                }
+                            }
+                        }
+                        None
+                    })
             })
     }
 
@@ -282,6 +278,31 @@ impl HighlightingAssets {
     }
 }
 
+fn asset_to_cache<T: serde::Serialize>(asset: &T, path: &Path, description: &str) -> Result<()> {
+    print!("Writing {} to {} ... ", description, path.to_string_lossy());
+    dump_to_file(asset, &path).chain_err(|| {
+        format!(
+            "Could not save {} to {}",
+            description,
+            path.to_string_lossy()
+        )
+    })?;
+    println!("okay");
+    Ok(())
+}
+
+fn asset_from_cache<T: serde::de::DeserializeOwned>(path: &Path, description: &str) -> Result<T> {
+    let asset_file = File::open(&path).chain_err(|| {
+        format!(
+            "Could not load cached {} '{}'",
+            description,
+            path.to_string_lossy()
+        )
+    })?;
+    from_reader(BufReader::new(asset_file))
+        .chain_err(|| format!("Could not parse cached {}", description))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,7 +311,7 @@ mod tests {
 
     use std::fs::File;
     use std::io::Write;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use crate::input::Input;
 
@@ -305,8 +326,7 @@ mod tests {
             SyntaxDetectionTest {
                 assets: HighlightingAssets::from_binary(),
                 syntax_mapping: SyntaxMapping::builtin(),
-                temp_dir: TempDir::new("bat_syntax_detection_tests")
-                    .expect("creation of temporary directory"),
+                temp_dir: TempDir::new().expect("creation of temporary directory"),
             }
         }
 
@@ -321,9 +341,9 @@ mod tests {
                 writeln!(temp_file, "{}", first_line).unwrap();
             }
 
-            let input = Input::ordinary_file(file_path.as_os_str());
+            let input = Input::ordinary_file(&file_path);
             let dummy_stdin: &[u8] = &[];
-            let mut opened_input = input.open(dummy_stdin).unwrap();
+            let mut opened_input = input.open(dummy_stdin, None).unwrap();
 
             self.assets
                 .get_syntax(None, &mut opened_input, &self.syntax_mapping)
@@ -335,9 +355,9 @@ mod tests {
         fn syntax_for_file_with_content_os(&self, file_name: &OsStr, first_line: &str) -> String {
             let file_path = self.temp_dir.path().join(file_name);
             let input = Input::from_reader(Box::new(BufReader::new(first_line.as_bytes())))
-                .with_name(Some(file_path.as_os_str()));
+                .with_name(Some(&file_path));
             let dummy_stdin: &[u8] = &[];
-            let mut opened_input = input.open(dummy_stdin).unwrap();
+            let mut opened_input = input.open(dummy_stdin, None).unwrap();
 
             self.assets
                 .get_syntax(None, &mut opened_input, &self.syntax_mapping)
@@ -360,8 +380,8 @@ mod tests {
         }
 
         fn syntax_for_stdin_with_content(&self, file_name: &str, content: &[u8]) -> String {
-            let input = Input::stdin().with_name(Some(OsStr::new(file_name)));
-            let mut opened_input = input.open(content).unwrap();
+            let input = Input::stdin().with_name(Some(file_name));
+            let mut opened_input = input.open(content, None).unwrap();
 
             self.assets
                 .get_syntax(None, &mut opened_input, &self.syntax_mapping)
@@ -444,6 +464,7 @@ mod tests {
         assert_eq!(test.syntax_for_file("test.sass"), "Sass");
         assert_eq!(test.syntax_for_file("test.js"), "JavaScript (Babel)");
         assert_eq!(test.syntax_for_file("test.fs"), "F#");
+        assert_eq!(test.syntax_for_file("test.v"), "Verilog");
     }
 
     #[test]
@@ -515,9 +536,9 @@ mod tests {
             .expect("creation of directory succeeds");
         symlink(&file_path, &file_path_symlink).expect("creation of symbolic link succeeds");
 
-        let input = Input::ordinary_file(file_path_symlink.as_os_str());
+        let input = Input::ordinary_file(&file_path_symlink);
         let dummy_stdin: &[u8] = &[];
-        let mut opened_input = input.open(dummy_stdin).unwrap();
+        let mut opened_input = input.open(dummy_stdin, None).unwrap();
 
         assert_eq!(
             test.assets

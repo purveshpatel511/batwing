@@ -1,25 +1,128 @@
 # unreleased
 
-
 ## Features
+
 
 ## Bugfixes
 
+
 ## Other
+
 
 ## Syntaxes
 
+
 ## New themes
+
 
 ## `bat` as a library
 
-## Packaging
+
+
+
+# v0.18.2
+
+## Features
+
+- Ignore known backup/template filename suffixes when selecting the syntax, see #1687 (@scop)
+
+## Bugfixes
+
+- Fix for a security vulnerability on Windows. Prior to this release, `bat` would execute programs called `less`/`less.exe` from the current working directory (instead of the one from `PATH`) with priority. An attacker might be able to use this by placing a malicious program in a shared directory where the user would execute `bat`. `bat` users on Windows are advised to upgrade to this version. See #1724 and #1472 (@Ry0taK).
+
+## Other
+
+- Add bash completion, see #1678 (@scop)
+- Fix Clippy lints, see #1661 (@mohamed-abdelnour)
+- Add syntax highlighting test files, see #1213 and #1668 (@mohamed-abdelnour)
+
+## Syntaxes
+
+- Upgraded Julia syntax to fix a highlighting bug, see #1692
+- Added support for `dash` syntax, see #1654 (@mohamed-abdelnour)
+- Added support for `XAML` syntax, see #1590 and #1655 (@mohamed-abdelnour)
+- Apply `DotENV` syntax also for `.env.default` and `.env.defaults` files, see #1669
+
+
+# v0.18.1
+
+## Bugfixes
+
+- Mouse support and screen clearing broken for `less` versions with minor version number (581.2), see #1629 and #1639 (@aswild)
+
+## Other
+
+- `Input::ordinary_file` and `Input::with_name` now accept `Path` rather than `OsStr` see #1571 (@matklad)
+- The `LESS` environment variable is now included in `bat --diagnostic`, see #1589 (@Enselic)
+- Increased min. required Rust version to 1.45
+
+## Syntaxes
+
+- Improved the Syslog syntax highlighting, see #1606 (@keith-hall)
+- Replaced "Advanced CSV" with a custom CSV syntax definition written especially for `bat`; see #1574 (@keith-hall)
+- Added SystemVerilog file syntax, see #1580 (@SeanMcLoughlin)
+- Added Solidity and Vyper syntax, see #1602 (@Ersikan)
+
+## New themes
+
+- Dark+ VS Code theme, see #1588 and #1598 (@PatriotRossii)
+
+
+
+# v0.18.0
+
+## Features
+
+- Use a pager when `bat --list-languages` is called, see #1394 (@stku1985)
+
+## Bugfixes
+
+- If the last line doesn't end with a newline character, don't add it if `--style=plain`, see #1438 (@Enselic)
+- Only print themes hint in interactive mode (`bat --list-themes`), see #1439 (@rsteube)
+- Make ./tests/syntax-tests/regression_test.sh work on recent versions of macOS, see #1443 (@Enselic)
+- VimL syntax highlighting fix, see #1450 (@esensar)
+- Print an 'Invalid syntax theme settings' error message if a custom theme is broken, see #614 (@Enselic)
+- If plain mode is set and wrap is not explicitly opted in, long lines will no be truncated, see #1426
+- If `PAGER` (but not `BAT_PAGER` or `--pager`) is `more` or `most`, silently use `less` instead to ensure support for colors, see #1063 (@Enselic)
+- If `PAGER` is `bat`, silently use `less` to prevent recursion. For `BAT_PAGER` or `--pager`, exit with error, see #1413 (@Enselic)
+- Manpage highlighting fix, see #1511 (@keith-hall)
+- `BAT_CONFIG_PATH` ignored by `bat` if non-existent, see #1550 (@sharkdp)
+
+## Other
+
+- Performance improvements, see #1421 (@LovecraftianHorror)
+- Added a new `--diagnostic` option to collect information for bug reports, see #1459 (@sharkdp)
+- Modified default theme colors to differentiate between a JSON key and a string value, see #1400 (@keith-hall)
+- Upped min required Rust version to 1.42
+
+## Syntaxes
+
+- Added Zig syntax, see #1470 (@paulsmith)
+- Added Lean syntax, see #1446 (@Julian)
+- Added `.resource` extension for Robot Framework files, see #1386
+- Added `gnuplot` syntax, see #1431 (@sharkdp)
+- Highlight *.pac (Proxy auto-config) files as JavaScript, see #1515 (@sharkdp)
+
+## New themes
+
+- `ansi` replaces `ansi-dark` and `ansi-light`, see #1104 and #1412 (@mk12). **Breaking change:** users that were previously using one of the `ansi-*` themes should switch to `ansi`.
+- The Gruvbox theme has been updated, see #1291 (@j0hnmeow). **Breaking change:** users that were previously using `gruvbox` or `gruvbox-white` should update and use `gruvbox-dark`/`gruvbox-light` instead.
+
+## `bat` as a library
+
+- The following `PrettyPrinter` methods have been removed (they were previously deprecated):
+   - `input_stdin_with_name`
+   - `input_from_bytes_with_name`
+   - `input_from_reader_with_name`
+   - `vcs_modification_markers` (if the `git` feature is not enabled)
+
 
 # v0.17.1
 
 ## Bugfixes
 
 - Running `bat` without arguments fails ("output file is also an input"), see #1396
+
 
 # v0.17.0
 
@@ -456,7 +559,7 @@ You can see the API documentation here: https://docs.rs/bat/
 
 - Added `BAT_CONFIG_PATH` environment variable to set a non-default path for `bat`s configuration file, see #375 (@deg4uss3r)
 
-- Allow for multiple occurences of `--style` to allow for the configuration
+- Allow for multiple occurrences of `--style` to allow for the configuration
   of styles from the config file, see #367 (@sindreij)
 
 - Allow for multiple `--line-range` arguments, see #23

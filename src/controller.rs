@@ -14,6 +14,8 @@ use crate::output::OutputType;
 use crate::paging::PagingMode;
 use crate::printer::{InteractivePrinter, Printer, SimplePrinter};
 
+use clircle::Clircle;
+
 pub struct Controller<'a> {
     config: &'a Config<'a>,
     assets: &'a HighlightingAssets,
@@ -66,6 +68,12 @@ impl<'b> Controller<'b> {
         }
 
         let attached_to_pager = output_type.is_pager();
+        let stdout_identifier = if cfg!(windows) || attached_to_pager {
+            None
+        } else {
+            clircle::Identifier::stdout()
+        };
+
         let writer = output_type.handle()?;
         let mut no_errors: bool = true;
 
@@ -79,7 +87,7 @@ impl<'b> Controller<'b> {
         };
 
         for (index, input) in inputs.into_iter().enumerate() {
-            match input.open(io::stdin().lock()) {
+            match input.open(io::stdin().lock(), stdout_identifier.as_ref()) {
                 Err(error) => {
                     print_error(&error, writer);
                     no_errors = false;
@@ -197,6 +205,8 @@ impl<'b> Controller<'b> {
         let mut first_range: bool = true;
         let mut mid_range: bool = false;
 
+        let style_snip = self.config.style_components.snip();
+
         while reader.read_line(&mut line_buffer)? {
             match line_ranges.check(line_number) {
                 RangeCheckResult::BeforeOrBetweenRanges => {
@@ -207,7 +217,7 @@ impl<'b> Controller<'b> {
                 }
 
                 RangeCheckResult::InRange => {
-                    if self.config.style_components.snip() {
+                    if style_snip {
                         if first_range {
                             first_range = false;
                             mid_range = true;

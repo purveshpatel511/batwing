@@ -185,7 +185,7 @@ ln -s /usr/bin/batcat ~/.local/bin/bat
 [release page](https://github.com/sharkdp/bat/releases) и установить так:
 
 ```bash
-sudo dpkg -i bat_0.17.1_amd64.deb  # измените архитектуру и версию
+sudo dpkg -i bat_0.18.2_amd64.deb  # измените архитектуру и версию
 ```
 
 ### Alpine Linux
@@ -341,7 +341,7 @@ ansible-galaxy install aeimer.install_bat
 
 ### Из исходников
 
-Если вы желаете установить `bat` из исходников, вам понадобится Rust 1.40 или выше. После этого используйте `cargo`, чтобы все скомпилировать:
+Если вы желаете установить `bat` из исходников, вам понадобится Rust 1.45 или выше. После этого используйте `cargo`, чтобы все скомпилировать:
 
 ```bash
 cargo install --locked bat
@@ -587,7 +587,7 @@ cargo install --locked --force
 Есть очень много альтернатив `bat`. Смотрите [этот документ](doc/alternatives.md) для сравнения.
 
 ## Лицензия
-Copyright (c) 2018-2020 [Разработчики bat](https://github.com/sharkdp/bat).
+Copyright (c) 2018-2021 [Разработчики bat](https://github.com/sharkdp/bat).
 
 `bat` распостраняется под лицензями MIT License и Apache License 2.0 (на выбор пользователя).
 

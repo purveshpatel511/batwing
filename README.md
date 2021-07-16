@@ -94,6 +94,16 @@ bat f - g  # output 'f', then stdin, then 'g'.
 
 ### Integration with other tools
 
+#### `fzf`
+
+You can use `bat` as a previewer for [`fzf`](https://github.com/junegunn/fzf). To do this,
+use `bat`s `--color=always` option to force colorized output. You can also use `--line-range`
+option to restrict the load times for long files:
+```bash
+fzf --preview 'bat --color=always --style=numbers --line-range=:500 {}'
+```
+For more information, see [`fzf`s `README`](https://github.com/junegunn/fzf#preview-window).
+
 #### `find` or `fd`
 
 You can use the `-exec` option of `find` to preview all search results with `bat`:
@@ -163,6 +173,7 @@ bat main.cpp | xclip
 export MANPAGER="sh -c 'col -bx | bat -l man -p'"
 man 2 select
 ```
+(replace `bat` by `batcat` if you are on Debian or Ubuntu)
 
 It might also be necessary to set `MANROFFOPT="-c"` if you experience
 formatting problems.
@@ -180,15 +191,15 @@ The [`prettybat`](https://github.com/eth-p/bat-extras/blob/master/doc/prettybat.
 
 ## Installation
 
-[![Packaging status](https://repology.org/badge/vertical-allrepos/bat.svg)](https://repology.org/project/bat/versions)
+[![Packaging status](https://repology.org/badge/vertical-allrepos/bat-cat.svg)](https://repology.org/project/bat-cat/versions)
 
 ### On Ubuntu (using `apt`)
 *... and other Debian-based Linux distributions.*
 
 `bat` is making its way through the [Ubuntu](https://packages.ubuntu.com/eoan/bat) and
-[Debian](https://packages.debian.org/sid/bat) package release process, and is available
-for Ubuntu as of Eoan 19.10. On Debian `bat` is currently only available on the unstable
-"Sid" branch.
+[Debian](https://packages.debian.org/testing/bat) package release process, and is available
+for Ubuntu as of Eoan 19.10. On Debian `bat` is currently available on the unstable
+"Sid" branch and on the testing branch.
 
 If your Ubuntu/Debian installation is new enough you can simply run:
 
@@ -196,7 +207,7 @@ If your Ubuntu/Debian installation is new enough you can simply run:
 apt install bat
 ```
 
-If you install `bat` this way, please note that the executable may be installed as `batcat` instead of `bat` (due to [a name
+**Important**: If you install `bat` this way, please note that the executable may be installed as `batcat` instead of `bat` (due to [a name
 clash with another package](https://github.com/sharkdp/bat/issues/982)). You can set up a `bat -> batcat` symlink or alias to prevent any issues that may come up because of this and to be consistent with other distributions:
 ``` bash
 mkdir -p ~/.local/bin
@@ -211,7 +222,7 @@ the most recent release of `bat`, download the latest `.deb` package from the
 [release page](https://github.com/sharkdp/bat/releases) and install it via:
 
 ```bash
-sudo dpkg -i bat_0.17.1_amd64.deb  # adapt version number and architecture
+sudo dpkg -i bat_0.18.2_amd64.deb  # adapt version number and architecture
 ```
 
 ### On Alpine Linux
@@ -256,6 +267,13 @@ You can install `bat` via xbps-install:
 xbps-install -S bat
 ```
 
+### On Termux
+
+You can install `bat` via pkg:
+```bash
+pkg install bat
+```
+
 ### On FreeBSD
 
 You can install a precompiled [`bat` package](https://www.freshports.org/textproc/bat) with pkg:
@@ -286,6 +304,11 @@ You can install `bat` with zypper:
 ```bash
 zypper install bat
 ```
+
+### Via snap package
+
+There is currently no recommended snap package available.
+Existing packages may be available, but are not officially supported and may contain [issues](https://github.com/sharkdp/bat/issues/1519).
 
 ### On macOS (or Linux) via Homebrew
 
@@ -340,7 +363,7 @@ binaries are also available: look for archives with `musl` in the file name.
 
 ### From source
 
-If you want to build `bat` from source, you need Rust 1.40 or
+If you want to build `bat` from source, you need Rust 1.45 or
 higher. You can then use `cargo` to build everything:
 
 ```bash
@@ -374,12 +397,11 @@ You can also use a custom theme by following the
 
 ### 8-bit themes
 
-`bat` has four themes that always use [8-bit colors](https://en.wikipedia.org/wiki/ANSI_escape_code#Colors),
+`bat` has three themes that always use [8-bit colors](https://en.wikipedia.org/wiki/ANSI_escape_code#Colors),
 even when truecolor support is available:
 
-- `ansi-dark` looks decent on any terminal with a dark background. It uses 3-bit colors: black, red,
-  green, yellow, blue, magenta, cyan, and white.
-- `ansi-light` is like `ansi-dark`, but for terminals with a light background.
+- `ansi` looks decent on any terminal. It uses 3-bit colors: black, red, green,
+  yellow, blue, magenta, cyan, and white.
 - `base16` is designed for [base16](https://github.com/chriskempson/base16) terminal themes. It uses
   4-bit colors (3-bit colors plus bright variants) in accordance with the
   [base16 styling guidelines](https://github.com/chriskempson/base16/blob/master/styling.md).
@@ -387,10 +409,11 @@ even when truecolor support is available:
   It replaces certain bright colors with 8-bit colors from 16 to 21. **Do not** use this simply
   because you have a 256-color terminal but are not using base16-shell.
 
-Although these themes are more restricted, they have two advantages over truecolor themes:
+Although these themes are more restricted, they have three advantages over truecolor themes. They:
 
-- They harmonize better with other terminal software using 3-bit or 4-bit colors.
-- When you change your terminal theme, `bat` output already on the screen will update to match.
+- Enjoy maximum compatibility. Some terminal utilities do not support more than 3-bit colors.
+- Adapt to terminal theme changes. Even for already printed output.
+- Visually harmonize better with other terminal software.
 
 ### Output style
 
@@ -466,7 +489,7 @@ You can add new (or change existing) file name patterns using the `--map-syntax`
 command line option. The option takes an argument of the form `pattern:syntax` where
 `pattern` is a glob pattern that is matched against the file name and
 the absolute file path. The `syntax` part is the full name of a supported language
-(use `bat --list-languages` for an overview)full .
+(use `bat --list-languages` for an overview).
 
 Note: You probably want to use this option as an entry in `bat`s configuration file instead
 of passing it on the command line (see below).
@@ -484,7 +507,7 @@ Example: To open all files called `.ignore` (exact match) with the "Git Ignore" 
 Example: To open all `.conf` files in subfolders of `/etc/apache2` with the "Apache Conf"
 syntax, use (this mapping is already built in):
 ```bash
--map-syntax='/etc/apache2/**/*.conf:Apache Conf'
+--map-syntax='/etc/apache2/**/*.conf:Apache Conf'
 ```
 
 ### Using a different pager
@@ -493,6 +516,8 @@ syntax, use (this mapping is already built in):
 set, `less` is used by default. If you want to use a different pager, you can either modify the
 `PAGER` variable or set the `BAT_PAGER` environment variable to override what is specified in
 `PAGER`.
+
+**Note**: If `PAGER` is `more` or `most`, `bat` will silently use `less` instead to ensure support for colors.
 
 If you want to pass command-line arguments to the pager, you can also set them via the
 `PAGER`/`BAT_PAGER` variables:
@@ -676,6 +701,11 @@ bash assets/create.sh
 cargo install --path . --locked --force
 ```
 
+If you want to build an application that uses `bat`s pretty-printing
+features as a library, check out the [the API documentation](https://docs.rs/bat/).
+Note that you have to use either `regex-onig` or `regex-fancy` as a feature
+when you depend on `bat` as a library.
+
 ## Contributing
 
 Take a look at the [`CONTRIBUTING.md`](CONTRIBUTING.md) guide.
@@ -685,6 +715,11 @@ Take a look at the [`CONTRIBUTING.md`](CONTRIBUTING.md) guide.
 - [sharkdp](https://github.com/sharkdp)
 - [eth-p](https://github.com/eth-p)
 - [keith-hall](https://github.com/keith-hall)
+- [Enselic](https://github.com/Enselic)
+
+## Security vulnerabilities
+
+Please contact [David Peter](https://david-peter.de/) via email if you want to report a vulnerability in `bat`.
 
 ## Project goals and alternatives
 
@@ -699,7 +734,7 @@ There are a lot of alternatives, if you are looking for similar programs. See
 [this document](doc/alternatives.md) for a comparison.
 
 ## License
-Copyright (c) 2018-2020 [bat-developers](https://github.com/sharkdp/bat).
+Copyright (c) 2018-2021 [bat-developers](https://github.com/sharkdp/bat).
 
 `bat` is made available under the terms of either the MIT License or the Apache License 2.0, at your option.
 

@@ -1,11 +1,37 @@
-use assert_cmd::Command;
+use assert_cmd::cargo::CommandCargoExt;
 use predicates::{prelude::predicate, str::PredicateStrExt};
+use serial_test::serial;
 use std::path::Path;
+use std::process::Command;
 use std::str::from_utf8;
+use tempfile::tempdir;
+
+#[cfg(unix)]
+mod unix {
+    pub use std::fs::File;
+    pub use std::io::{self, Write};
+    pub use std::os::unix::io::FromRawFd;
+    pub use std::path::PathBuf;
+    pub use std::process::Stdio;
+    pub use std::thread;
+    pub use std::time::Duration;
+
+    pub use assert_cmd::assert::OutputAssertExt;
+    pub use nix::pty::{openpty, OpenptyResult};
+    pub use wait_timeout::ChildExt;
+
+    pub const SAFE_CHILD_PROCESS_CREATION_TIME: Duration = Duration::from_millis(100);
+    pub const CHILD_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+}
+#[cfg(unix)]
+use unix::*;
+
+mod utils;
+use utils::mocked_pagers;
 
 const EXAMPLES_DIR: &str = "tests/examples";
 
-fn bat_with_config() -> Command {
+fn bat_raw_command_with_config() -> Command {
     let mut cmd = Command::cargo_bin("bat").unwrap();
     cmd.current_dir("tests/examples");
     cmd.env_remove("PAGER");
@@ -17,10 +43,18 @@ fn bat_with_config() -> Command {
     cmd
 }
 
-fn bat() -> Command {
-    let mut cmd = bat_with_config();
+fn bat_raw_command() -> Command {
+    let mut cmd = bat_raw_command_with_config();
     cmd.arg("--no-config");
     cmd
+}
+
+fn bat_with_config() -> assert_cmd::Command {
+    assert_cmd::Command::from_std(bat_raw_command_with_config())
+}
+
+fn bat() -> assert_cmd::Command {
+    assert_cmd::Command::from_std(bat_raw_command())
 }
 
 #[test]
@@ -187,6 +221,122 @@ fn line_range_multiple() {
         .assert()
         .success()
         .stdout("line 1\nline 2\nline 4\n");
+}
+
+#[cfg(unix)]
+fn setup_temp_file(content: &[u8]) -> io::Result<(PathBuf, tempfile::TempDir)> {
+    let dir = tempfile::tempdir().expect("Couldn't create tempdir");
+    let path = dir.path().join("temp_file");
+    File::create(&path)?.write_all(content)?;
+    Ok((path, dir))
+}
+
+#[cfg(unix)]
+#[test]
+fn basic_io_cycle() -> io::Result<()> {
+    let (filename, dir) = setup_temp_file(b"I am not empty")?;
+
+    let file_out = Stdio::from(File::create(&filename)?);
+    let res = bat_raw_command()
+        .arg("test.txt")
+        .arg(&filename)
+        .stdout(file_out)
+        .assert();
+    drop(dir);
+    res.failure();
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn first_file_cyclic_is_ok() -> io::Result<()> {
+    let (filename, dir) = setup_temp_file(b"I am not empty")?;
+
+    let file_out = Stdio::from(File::create(&filename)?);
+    let res = bat_raw_command()
+        .arg(&filename)
+        .arg("test.txt")
+        .stdout(file_out)
+        .assert();
+    drop(dir);
+    res.success();
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn empty_file_cycle_is_ok() -> io::Result<()> {
+    let (filename, dir) = setup_temp_file(b"I am not empty")?;
+
+    let file_out = Stdio::from(File::create(&filename)?);
+    let res = bat_raw_command()
+        .arg("empty.txt")
+        .arg(&filename)
+        .stdout(file_out)
+        .assert();
+    drop(dir);
+    res.success();
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn stdin_to_stdout_cycle() -> io::Result<()> {
+    let (filename, dir) = setup_temp_file(b"I am not empty")?;
+    let file_in = Stdio::from(File::open(&filename)?);
+    let file_out = Stdio::from(File::create(&filename)?);
+    let res = bat_raw_command()
+        .arg("test.txt")
+        .arg("-")
+        .stdin(file_in)
+        .stdout(file_out)
+        .assert();
+    drop(dir);
+    res.failure();
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn no_args_doesnt_break() {
+    // To simulate bat getting started from the shell, a process is created with stdin and stdout
+    // as the slave end of a pseudo terminal. Although both point to the same "file", bat should
+    // not exit, because in this case it is safe to read and write to the same fd, which is why
+    // this test exists.
+    let OpenptyResult { master, slave } = openpty(None, None).expect("Couldn't open pty.");
+    let mut master = unsafe { File::from_raw_fd(master) };
+    let stdin = unsafe { Stdio::from_raw_fd(slave) };
+    let stdout = unsafe { Stdio::from_raw_fd(slave) };
+
+    let mut child = bat_raw_command()
+        .stdin(stdin)
+        .stdout(stdout)
+        .spawn()
+        .expect("Failed to start.");
+
+    // Some time for the child process to start and to make sure, that we can poll the exit status.
+    // Although this waiting period is not necessary, it is best to keep it in and be absolutely
+    // sure, that the try_wait does not error later.
+    thread::sleep(SAFE_CHILD_PROCESS_CREATION_TIME);
+
+    // The child process should be running and waiting for input,
+    // therefore no exit status should be available.
+    let exit_status = child
+        .try_wait()
+        .expect("Error polling exit status, this should never happen.");
+    assert!(exit_status.is_none());
+
+    // Write Ctrl-D (end of transmission) to the pty.
+    master
+        .write_all(&[0x04])
+        .expect("Couldn't write EOT character to master end.");
+
+    let exit_status = child
+        .wait_timeout(CHILD_WAIT_TIMEOUT)
+        .expect("Error polling exit status, this should never happen.")
+        .expect("Exit status not set, but the child should have exited already.");
+
+    assert!(exit_status.success());
 }
 
 #[test]
@@ -406,13 +556,114 @@ fn pager_disable() {
 }
 
 #[test]
+fn env_var_pager_value_bat() {
+    bat()
+        .env("PAGER", "bat")
+        .arg("--paging=always")
+        .arg("test.txt")
+        .assert()
+        .success()
+        .stdout(predicate::eq("hello world\n").normalize());
+}
+
+#[test]
+fn env_var_bat_pager_value_bat() {
+    bat()
+        .env("BAT_PAGER", "bat")
+        .arg("--paging=always")
+        .arg("test.txt")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("bat as a pager is disallowed"));
+}
+
+#[test]
 fn pager_value_bat() {
     bat()
         .arg("--pager=bat")
         .arg("--paging=always")
         .arg("test.txt")
         .assert()
-        .failure();
+        .failure()
+        .stderr(predicate::str::contains("bat as a pager is disallowed"));
+}
+
+/// We shall use less instead of most if PAGER is used since PAGER
+/// is a generic env var
+#[test]
+#[serial] // Because of PATH
+fn pager_most_from_pager_env_var() {
+    mocked_pagers::with_mocked_versions_of_more_and_most_in_path(|| {
+        // If the output is not "I am most" then we know 'most' is not used
+        bat()
+            .env("PAGER", mocked_pagers::from("most"))
+            .arg("--paging=always")
+            .arg("test.txt")
+            .assert()
+            .success()
+            .stdout(predicate::eq("hello world\n").normalize());
+    });
+}
+
+/// If the bat-specific BAT_PAGER is used, obey the wish of the user
+/// and allow 'most'
+#[test]
+#[serial] // Because of PATH
+fn pager_most_from_bat_pager_env_var() {
+    mocked_pagers::with_mocked_versions_of_more_and_most_in_path(|| {
+        bat()
+            .env("BAT_PAGER", mocked_pagers::from("most"))
+            .arg("--paging=always")
+            .arg("test.txt")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("I am most"));
+    });
+}
+
+/// Same reasoning with --pager as with BAT_PAGER
+#[test]
+#[serial] // Because of PATH
+fn pager_most_from_pager_arg() {
+    mocked_pagers::with_mocked_versions_of_more_and_most_in_path(|| {
+        bat()
+            .arg("--paging=always")
+            .arg(format!("--pager={}", mocked_pagers::from("most")))
+            .arg("test.txt")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("I am most"));
+    });
+}
+
+/// Make sure the logic for 'most' applies even if an argument is passed
+#[test]
+#[serial] // Because of PATH
+fn pager_most_with_arg() {
+    mocked_pagers::with_mocked_versions_of_more_and_most_in_path(|| {
+        bat()
+            .env("PAGER", format!("{} -w", mocked_pagers::from("most")))
+            .arg("--paging=always")
+            .arg("test.txt")
+            .assert()
+            .success()
+            .stdout(predicate::eq("hello world\n").normalize());
+    });
+}
+
+/// Sanity check that 'more' is treated like 'most'
+#[test]
+#[serial] // Because of PATH
+fn pager_more() {
+    mocked_pagers::with_mocked_versions_of_more_and_most_in_path(|| {
+        bat()
+            .env("PAGER", mocked_pagers::from("more"))
+            .arg("--paging=always")
+            .arg("test.txt")
+            .assert()
+            .success()
+            .stdout(predicate::eq("hello world\n").normalize());
+    });
 }
 
 #[test]
@@ -439,6 +690,17 @@ fn alias_pager_disable_long_overrides_short() {
 }
 
 #[test]
+fn pager_failed_to_parse() {
+    bat()
+        .env("BAT_PAGER", "mismatched-quotes 'a")
+        .arg("--paging=always")
+        .arg("test.txt")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Could not parse pager command"));
+}
+
+#[test]
 fn config_location_test() {
     bat_with_config()
         .env("BAT_CONFIG_PATH", "bat.conf")
@@ -446,6 +708,33 @@ fn config_location_test() {
         .assert()
         .success()
         .stdout("bat.conf\n");
+
+    bat_with_config()
+        .env("BAT_CONFIG_PATH", "not-existing.conf")
+        .arg("--config-file")
+        .assert()
+        .success()
+        .stdout("not-existing.conf\n");
+}
+
+#[test]
+fn config_location_when_generating() {
+    let tmp_dir = tempdir().expect("can create temporary directory");
+    let tmp_config_path = tmp_dir.path().join("should-be-created.conf");
+
+    // Create the file with bat
+    bat_with_config()
+        .env("BAT_CONFIG_PATH", tmp_config_path.to_str().unwrap())
+        .arg("--generate-config-file")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::is_match("Success! Config file written to .*should-be-created.conf\n")
+                .unwrap(),
+        );
+
+    // Now we expect the file to exist. If it exists, we assume contents are correct
+    assert!(tmp_config_path.exists());
 }
 
 #[test]
@@ -740,9 +1029,7 @@ fn file_with_invalid_utf8_filename() {
     use std::io::Write;
     use std::os::unix::ffi::OsStrExt;
 
-    use tempdir::TempDir;
-
-    let tmp_dir = TempDir::new("bat_test").expect("can create temporary directory");
+    let tmp_dir = tempdir().expect("can create temporary directory");
     let file_path = tmp_dir
         .path()
         .join(OsStr::from_bytes(b"test-invalid-utf8-\xC3(.rs"));
@@ -811,5 +1098,43 @@ fn show_all_mode() {
         .arg("nonprintable.txt")
         .assert()
         .stdout("hello·world␊\n├──┤␍␀␇␈␛")
+        .stderr("");
+}
+
+#[test]
+fn plain_mode_does_not_add_nonexisting_newline() {
+    bat()
+        .arg("--paging=never")
+        .arg("--color=never")
+        .arg("--decorations=always")
+        .arg("--style=plain")
+        .arg("single-line.txt")
+        .assert()
+        .success()
+        .stdout("Single Line");
+}
+
+// Regression test for https://github.com/sharkdp/bat/issues/299
+#[test]
+fn grid_for_file_without_newline() {
+    bat()
+        .arg("--paging=never")
+        .arg("--color=never")
+        .arg("--terminal-width=80")
+        .arg("--wrap=never")
+        .arg("--decorations=always")
+        .arg("--style=full")
+        .arg("single-line.txt")
+        .assert()
+        .success()
+        .stdout(
+            "\
+───────┬────────────────────────────────────────────────────────────────────────
+       │ File: single-line.txt
+───────┼────────────────────────────────────────────────────────────────────────
+   1   │ Single Line
+───────┴────────────────────────────────────────────────────────────────────────
+",
+        )
         .stderr("");
 }

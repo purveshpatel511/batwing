@@ -1,6 +1,6 @@
 name: batcat
 base: core18
-version: '0.17.1'
+version: '0.18.2'
 summary: A cat(1) clone with syntax highlighting and Git integration.
 description: |
   This is a cat clone with more utilities and amazing features like syntax highlighting, Git integration
